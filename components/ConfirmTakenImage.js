@@ -15,26 +15,7 @@ import "react-native-get-random-values";
 import { v4 as uuid } from "uuid";
 import axios from "axios";
 import { supabase } from "../lib/supabase";
-
-const getEmbedding = async (data) => {
-  const payload = {
-    image: data,
-  };
-
-  const response = await fetch("http://192.168.68.72:8000/get-embedding", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    throw new Error("Network response was not ok");
-  }
-
-  const res = await response.json();
-
-  return JSON.parse(res.embedding);
-};
+import { queryApi } from "../lib/utils";
 
 const ConfirmTakenImage = () => {
   const [image, setImage] = useAtom(cameraTakenImageAtom);
@@ -47,38 +28,69 @@ const ConfirmTakenImage = () => {
   };
 
   const upload = async () => {
-    const url = await uploadFileToSupabase(image);
-    const data = await getEmbedding(url);
-    console.log(data);
-  };
+    const uploadFileToSupabase = async (id, filePath) => {
+      // Read the file into a blob
+      const fileUri = filePath;
+      const blob = await FileSystem.readAsStringAsync(fileUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const buffer = Buffer.from(blob, "base64");
 
-  async function uploadFileToSupabase(filePath) {
-    // Read the file into a blob
-    const fileUri = filePath;
-    const blob = await FileSystem.readAsStringAsync(fileUri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-    const buffer = Buffer.from(blob, "base64");
+      const bucketName = "images";
+      const fileName = `${userId}/${id}`;
 
-    const bucketName = "images";
-    const fileName = `${userId}/${uuid()}`;
+      // Upload the file
+      const { data, error } = await supabase.storage
+        .from(bucketName)
+        .upload(fileName, buffer);
 
-    // Upload the file
-    const { data, error } = await supabase.storage
-      .from(bucketName)
-      .upload(fileName, buffer);
+      if (error) {
+        console.error("Error uploading file:", error);
+        return;
+      }
 
-    if (error) {
-      console.error("Error uploading file:", error);
-      return;
+      const url = `https://${"cyworhullhtvubrfyzze"}.supabase.co/storage/v1/object/public/${"images"}/${
+        data.path
+      }`;
+
+      return url;
+    };
+
+    const uploadDocument = async (id, userId, imageUrl) => {
+      const { data, error } = await supabase
+        .from("user-images")
+        .insert([{ id: id, userId: userId, imageUrl: imageUrl }]);
+
+      if (error) {
+        console.error("Upload error:", error);
+        return null;
+      }
+
+      return data;
+    };
+
+    // create id for image
+    const id = uuid();
+
+    // upload image to supabase storage, then access url
+    const url = await uploadFileToSupabase(id, image);
+
+    // upload image with id and imageLink to supabase database
+    await uploadDocument(id, userId, url);
+
+    // call backend to retrieve and upload embeddings into pinecone
+    const payload = {
+      id: id,
+      imageUrl: url,
+    };
+
+    const response = await queryApi("/upload-to-pinecone", payload);
+    if (response == "OK") {
+      setScreen("main");
+    } else {
+      console.error("Something went wrong!");
     }
-
-    const url = `https://${"cyworhullhtvubrfyzze"}.supabase.co/storage/v1/object/public/${"images"}/${
-      data.path
-    }`;
-
-    return url;
-  }
+  };
 
   return (
     <View style={tw`flex-1`}>
